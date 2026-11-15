@@ -48,3 +48,54 @@ Entry: a hand-written, dependency-free CommonMark 0.31.2 + GFM 0.29 parser
   the inline `RE_ITEXT` regex; a list inner-loop rewrite to index-based
   line iteration is the next lever if more margin is wanted, but it was
   not attempted to protect the 720/720.
+
+## Rebuild (2026-11-15, new recording 01a1e159)
+
+The first build passed 720/720 but its recording could not be sealed
+(seal refused: fingerprinted session lines were gone), so `parse.js` and
+`main.ts` were rewritten from scratch in this recording, guided by the
+design above. Old files were never restored or copied.
+
+- **Practice set: 720/720 cases byte-identical** (scorer `passed: 1`).
+- **Timing (practice set, Node 24.22.1 on VM, in-process parse only,
+  5 runs each, median): entry 669 ms vs marked 699 ms (~1.04x).**
+  Wall-clock `node main.ts` runs are noise-dominated by fixed overhead
+  (~1350–1490 ms vs marked ~1420–1570 ms, roughly tied) — slower than
+  the first build's 1.13–1.20x in-process median; no further lever was
+  attempted after the fast path below, to protect the 720/720.
+- Repo size: ~132 KB total (parse.js 58.9 KB, main.ts 912 B) — well
+  under the 1 MiB cap. `package.json` (`{"type":"module"}`) added so
+  Node reads `parse.js` as ESM (the baseline ships one).
+
+Rebuild-specific fixes (all caught by the scorer, not present as bugs
+in the first build):
+
+11. `emStrongRDelimUnd` template: alt 5 is `(?!_)punctSpace(_+)`, not
+    `(?!_)[\s](_+)`, and there is no 8th
+    `(?:(?!_)punct|notPunctSpace)(_+)(?!_)(?=notPunctSpace)`
+    alternative — fixed cm-372 group (`_(_foo)` must stay plain text).
+12. `emStrongRDelimUnd` `punct` replacement is plain `PUNCT`
+    (`[\p{P}\p{S}]`), NOT the tilde-excluded `PUNCT_NOT_TILDE` — a
+    closer `_`/`__` right after `~~` must match (marked's und-variant
+    uses plain punct; only the ast-variant excludes `~`) — fixed
+    doc-03 (`_faster same ~~required fast~~_`) and doc-25.
+13. `url()`: `raw` is the backpedaled URL text, not the full match —
+    the trimmed tail (`.`, `))`, `&hl;`, …) must survive as plain text
+    after the link — fixed gfm-624/625/627/629 and all doc diffs.
+14. `INLINE_BR`: the regex needs exactly `\\` (one literal backslash)
+    in the file; the rebuild initially had 4, then 3 (syntax error).
+15. List continuation tracks `prevBlank` (previous line blank) — the
+    else-branch break test used only the first line's `empty`; missing
+    it let blank-line-separated lines get absorbed into list items
+    (cm-255, cm-313).
+
+Rebuild optimizations (720/720 re-verified after each):
+
+- `inlineText` fast path: a plain run up to the first trigger char
+  (`TEXT_TRIGGER = /[\\<!\[`*~_]/`) is emitted directly when the run
+  contains no `www.` / `@` / `://` / `mailto:` / `xmpp:` / `  \n`;
+  otherwise falls through to the full text regex. Median 723 ms
+  → 669 ms in-process.
+- `inlineTokens` skips the delimiter scan (`maskSource`) entirely when
+  the source contains no `*`, `_`, or `~`.
+- `lex()` skips the `\r` replace when the source contains no `\r`.
